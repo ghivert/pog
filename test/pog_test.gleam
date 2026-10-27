@@ -838,6 +838,98 @@ pub fn nested_transaction_crash_test() {
   disconnect(db)
 }
 
+pub fn nested_transaction_query_error_recovery_test() {
+  let db = start_default()
+
+  let assert Ok(Nil) =
+    pog.transaction(db.data, fn(db) {
+      insert_cat(db, "recovery-outer")
+      let assert Error(pog.TransactionRolledBack(pog.PostgresqlError(
+        code: "42P01",
+        ..,
+      ))) =
+        pog.transaction(db, fn(db) {
+          insert_cat(db, "recovery-inner")
+          pog.query("SELECT * FROM unknown_table") |> pog.execute(db)
+        })
+      // Rolling back to the savepoint makes the enclosing transaction usable
+      insert_cat(db, "recovery-after")
+      Ok(Nil)
+    })
+
+  assert cat_names(db.data, "recovery-") == ["recovery-outer", "recovery-after"]
+
+  disconnect(db)
+}
+
+pub fn nested_transaction_ignored_query_error_test() {
+  let db = start_default()
+
+  let assert Error(pog.TransactionQueryError(pog.PostgresqlError(
+    code: "25P02",
+    ..,
+  ))) =
+    pog.transaction(db.data, fn(db) {
+      insert_cat(db, "ignored-outer")
+      // The failing query aborts the enclosing transaction too, so releasing
+      // the savepoint fails
+      let assert Error(pog.TransactionQueryError(pog.PostgresqlError(
+        code: "25P02",
+        ..,
+      ))) =
+        pog.transaction(db, fn(db) {
+          insert_cat(db, "ignored-inner")
+          let _ = pog.query("SELECT * FROM unknown_table") |> pog.execute(db)
+          Ok(Nil)
+        })
+      Ok(Nil)
+    })
+
+  assert cat_names(db.data, "ignored-") == []
+
+  disconnect(db)
+}
+
+pub fn nested_transaction_unrescued_crash_test() {
+  let db = start_default()
+
+  let assert Error(_) =
+    exception.rescue(fn() {
+      pog.transaction(db.data, fn(db) {
+        insert_cat(db, "unrescued-outer")
+        pog.transaction(db, fn(db) {
+          insert_cat(db, "unrescued-inner")
+          panic as "testing nested rollbacks"
+        })
+      })
+    })
+
+  assert cat_names(db.data, "unrescued-") == []
+
+  disconnect(db)
+}
+
+pub fn named_connection_transaction_test() {
+  let name = process.new_name("pog_test")
+  let assert Ok(db) = default_config(name) |> pog.start
+  let connection = pog.named_connection(name)
+
+  let assert Ok(Nil) =
+    pog.transaction(connection, fn(db) {
+      insert_cat(db, "named-committed")
+      Ok(Nil)
+    })
+  let assert Error(pog.TransactionRolledBack("rolled back")) =
+    pog.transaction(connection, fn(db) {
+      insert_cat(db, "named-rolled-back")
+      Error("rolled back")
+    })
+
+  assert cat_names(connection, "named-") == ["named-committed"]
+
+  disconnect(db)
+}
+
 pub fn aborted_transaction_test() {
   let db = start_default()
 
