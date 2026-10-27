@@ -7,6 +7,16 @@
 - `url_config` now accepts query parameters other than `sslmode`, the `allow`
   and `prefer` SSL modes, percent-encoded user and password, and passwords
   containing `:`.
+- Added `default_timeout` to `Config`, used by queries without their own
+  timeout and by transactions.
+- Calling `transaction` inside a transaction now creates a nested transaction
+  using a savepoint, instead of ending the enclosing transaction.
+- A transaction aborted by a failing query now returns an error instead of
+  `Ok`, even when the callback ignores the failing query.
+- A failing rollback after a crash in a transaction is now logged, and no
+  longer hides the original crash.
+- pgo's checkout deadline errors are now returned as `QueryTimeout` instead of
+  crashing.
 
 ## v4.1.0 - 2025-07-14
 

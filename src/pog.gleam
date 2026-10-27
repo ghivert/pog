@@ -87,6 +87,9 @@ pub type Config {
     /// (default: False): By default, pgo will return a n-tuple, in the order of
     /// the query. By setting `rows_as_map` to `True`, the result will be `Dict`.
     rows_as_map: Bool,
+    /// (default: 5000): Timeout in milliseconds, used by queries that do not
+    /// set their own timeout with `timeout`, and by transactions.
+    default_timeout: Int,
   )
 }
 
@@ -214,6 +217,18 @@ pub fn rows_as_map(config: Config, rows_as_map: Bool) -> Config {
   Config(..config, rows_as_map:)
 }
 
+/// Timeout in milliseconds, used by queries that do not set their own timeout
+/// with `timeout`, and by transactions. A transaction has to complete within
+/// that delay, all of its queries included.
+///
+/// The value is read once when the pool starts and stored for the lifetime of
+/// the pool. Changing it requires restarting the pool.
+///
+/// default: 5000
+pub fn default_timeout(config: Config, default_timeout: Int) -> Config {
+  Config(..config, default_timeout:)
+}
+
 /// The internet protocol version to use.
 pub type IpVersion {
   /// Internet Protocol version 4 (IPv4)
@@ -242,6 +257,7 @@ pub fn default_config(pool_name pool_name: Name(Message)) -> Config {
     trace: False,
     ip_version: Ipv4,
     rows_as_map: False,
+    default_timeout: 5000,
   )
 }
 
@@ -446,13 +462,32 @@ pub type TransactionError(error) {
 ///
 /// If the function returns an `Error` or panics then the transaction is rolled
 /// back.
+///
+/// If a query fails inside the transaction, PostgreSQL aborts the whole
+/// transaction, even if the function ignores that error and returns an `Ok`.
+/// The transaction is then rolled back and an error is returned.
+///
+/// Calling `transaction` with the connection of an enclosing transaction
+/// creates a nested transaction, using a savepoint. Rolling back a nested
+/// transaction only rolls back what has been done inside it, and committing a
+/// nested transaction only commits it if the enclosing transaction is
+/// committed too.
+///
+/// The whole transaction has to complete within the `default_timeout` of the
+/// pool.
 pub fn transaction(
   pool: Connection,
   callback: fn(Connection) -> Result(t, error),
 ) -> Result(t, TransactionError(error)) {
   case pool {
     SingleConnection(conn) -> {
-      transaction_layer(conn, callback)
+      transaction_layer(
+        conn,
+        callback,
+        start: fn(conn) { command(conn, "savepoint " <> savepoint) },
+        commit: fn(conn) { command(conn, "release savepoint " <> savepoint) },
+        rollback: rollback_to_savepoint,
+      )
     }
     Pool(name) -> {
       // Check out a single connection from the pool
@@ -464,42 +499,78 @@ pub fn transaction(
       // process crashes
       use <- exception.defer(fn() { checkin(ref, conn) })
 
-      transaction_layer(conn, callback)
+      transaction_layer(
+        conn,
+        callback,
+        start: fn(conn) { command(conn, "begin") },
+        commit: commit,
+        rollback: fn(conn) { command(conn, "rollback") },
+      )
     }
   }
 }
 
+/// Savepoints are stacked by PostgreSQL, and a name always refers to the most
+/// recent savepoint with that name, so every nested transaction can use the
+/// same one.
+const savepoint = "pog_savepoint"
+
 fn transaction_layer(
   conn: SingleConnection,
   callback: fn(Connection) -> Result(t, error),
+  start start: fn(SingleConnection) -> Result(Nil, QueryError),
+  commit commit: fn(SingleConnection) -> Result(Nil, QueryError),
+  rollback rollback: fn(SingleConnection) -> Result(Nil, QueryError),
 ) -> Result(t, TransactionError(error)) {
-  let do = fn(conn, sql) {
-    run_query_extended(conn, sql)
-    |> result.map_error(TransactionQueryError)
-  }
+  use _ <- result.try(start(conn) |> result.map_error(TransactionQueryError))
 
-  // Start a transaction with the single connection
-  use _ <- result.try(do(conn, "begin"))
-
-  // When the callback crashes we want to roll back the transaction
+  // When the callback crashes we want to roll back the transaction. A failing
+  // rollback is logged, to keep the original crash as the reported error.
   use <- exception.on_crash(fn() {
-    let assert Ok(_) = do(conn, "rollback") as "rollback exec failed"
+    case rollback(conn) {
+      Ok(Nil) -> Nil
+      Error(error) -> log_rollback_failure(error)
+    }
   })
 
   case callback(SingleConnection(conn)) {
     // The callback was OK, commit the transaction
     Ok(t) -> {
-      use _ <- result.try(do(conn, "commit"))
+      use _ <- result.try(
+        commit(conn) |> result.map_error(TransactionQueryError),
+      )
       Ok(t)
     }
 
     Error(error) -> {
       // The callback failed, roll-back the transaction
-      use _ <- result.try(do(conn, "rollback"))
+      use _ <- result.try(
+        rollback(conn) |> result.map_error(TransactionQueryError),
+      )
       Error(TransactionRolledBack(error))
     }
   }
 }
+
+/// Rolling back to a savepoint keeps it, so it has to be released afterwards
+/// to keep enclosing transactions pointing to their own savepoint.
+fn rollback_to_savepoint(conn: SingleConnection) -> Result(Nil, QueryError) {
+  use _ <- result.try(command(conn, "rollback to savepoint " <> savepoint))
+  command(conn, "release savepoint " <> savepoint)
+}
+
+fn command(conn: SingleConnection, sql: String) -> Result(Nil, QueryError) {
+  run_query_extended(conn, sql)
+  |> result.replace(Nil)
+}
+
+/// Commits the transaction, and fails if PostgreSQL rolled it back instead
+/// because a query failed inside it.
+@external(erlang, "pog_ffi", "commit")
+fn commit(conn: SingleConnection) -> Result(Nil, QueryError)
+
+@external(erlang, "pog_ffi", "log_rollback_failure")
+fn log_rollback_failure(error: QueryError) -> Nil
 
 @external(erlang, "pog_ffi", "checkout")
 fn checkout(
@@ -526,7 +597,7 @@ fn run_query(
   a: Connection,
   b: String,
   c: List(Value),
-  timeout: Int,
+  timeout: Option(Int),
 ) -> Result(#(Int, List(Dynamic)), QueryError)
 
 @external(erlang, "pog_ffi", "query_extended")
@@ -562,7 +633,7 @@ pub opaque type Query(row_type) {
     sql: String,
     parameters: List(Value),
     row_decoder: Decoder(row_type),
-    timeout: Int,
+    timeout: Option(Int),
   )
 }
 
@@ -570,7 +641,7 @@ pub opaque type Query(row_type) {
 /// functions.
 ///
 pub fn query(sql: String) -> Query(Nil) {
-  Query(sql:, parameters: [], row_decoder: decode.success(Nil), timeout: 5000)
+  Query(sql:, parameters: [], row_decoder: decode.success(Nil), timeout: None)
 }
 
 /// Set the decoder to use for the type of row returned by executing this
@@ -592,11 +663,14 @@ pub fn parameter(query: Query(t1), parameter: Value) -> Query(t1) {
 
 /// Use a custom timeout for the query, in milliseconds.
 ///
-/// If this function is not used to give a timeout then default of 5000 ms is
-/// used.
+/// If this function is not used to give a timeout then the `default_timeout`
+/// of the pool is used.
+///
+/// Queries run inside a transaction are bounded by the timeout of the
+/// transaction instead, and ignore this one.
 ///
 pub fn timeout(query: Query(t1), timeout: Int) -> Query(t1) {
-  Query(..query, timeout:)
+  Query(..query, timeout: Some(timeout))
 }
 
 /// Run a query against a PostgreSQL database.

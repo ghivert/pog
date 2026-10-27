@@ -708,3 +708,168 @@ pub fn transaction_commit_test() {
 
   disconnect(db)
 }
+
+fn insert_cat(db: pog.Connection, name: String) -> Nil {
+  let sql =
+    "INSERT INTO cats VALUES (DEFAULT, $1, true, ARRAY ['black'], now(), '2020-03-04')"
+  let assert Ok(_) =
+    pog.query(sql)
+    |> pog.parameter(pog.text(name))
+    |> pog.execute(db)
+  Nil
+}
+
+fn cat_names(db: pog.Connection, prefix: String) -> List(String) {
+  let assert Ok(returned) =
+    pog.query("SELECT name FROM cats WHERE name LIKE $1 ORDER BY id")
+    |> pog.parameter(pog.text(prefix <> "%"))
+    |> pog.returning(decode.at([0], decode.string))
+    |> pog.execute(db)
+  returned.rows
+}
+
+pub fn nested_transaction_rollback_test() {
+  let db = start_default()
+
+  let assert Ok(Nil) =
+    pog.transaction(db.data, fn(db) {
+      insert_cat(db, "nested-rollback-outer")
+      let assert Error(pog.TransactionRolledBack("inner")) =
+        pog.transaction(db, fn(db) {
+          insert_cat(db, "nested-rollback-inner")
+          Error("inner")
+        })
+      Ok(Nil)
+    })
+
+  assert cat_names(db.data, "nested-rollback-") == ["nested-rollback-outer"]
+
+  disconnect(db)
+}
+
+pub fn nested_transaction_enclosing_rollback_test() {
+  let db = start_default()
+
+  let assert Error(pog.TransactionRolledBack("outer")) =
+    pog.transaction(db.data, fn(db) {
+      insert_cat(db, "nested-enclosing-outer")
+      let assert Ok(Nil) =
+        pog.transaction(db, fn(db) {
+          insert_cat(db, "nested-enclosing-inner")
+          Ok(Nil)
+        })
+      Error("outer")
+    })
+
+  assert cat_names(db.data, "nested-enclosing-") == []
+
+  disconnect(db)
+}
+
+pub fn deeply_nested_transaction_test() {
+  let db = start_default()
+
+  let assert Ok(Nil) =
+    pog.transaction(db.data, fn(db) {
+      insert_cat(db, "nested-deep-1")
+      let assert Error(pog.TransactionRolledBack("level 2")) =
+        pog.transaction(db, fn(db) {
+          insert_cat(db, "nested-deep-2")
+          let assert Error(pog.TransactionRolledBack("level 3")) =
+            pog.transaction(db, fn(db) {
+              insert_cat(db, "nested-deep-3")
+              Error("level 3")
+            })
+          Error("level 2")
+        })
+      let assert Ok(Nil) =
+        pog.transaction(db, fn(db) {
+          insert_cat(db, "nested-deep-4")
+          Ok(Nil)
+        })
+      Ok(Nil)
+    })
+
+  assert cat_names(db.data, "nested-deep-")
+    == ["nested-deep-1", "nested-deep-4"]
+
+  disconnect(db)
+}
+
+pub fn nested_transaction_crash_test() {
+  let db = start_default()
+
+  let assert Ok(Nil) =
+    pog.transaction(db.data, fn(db) {
+      insert_cat(db, "nested-crash-outer")
+      let assert Error(_) =
+        exception.rescue(fn() {
+          pog.transaction(db, fn(db) {
+            insert_cat(db, "nested-crash-inner")
+            panic as "testing nested rollbacks"
+          })
+        })
+      Ok(Nil)
+    })
+
+  assert cat_names(db.data, "nested-crash-") == ["nested-crash-outer"]
+
+  disconnect(db)
+}
+
+pub fn aborted_transaction_test() {
+  let db = start_default()
+
+  let assert Error(pog.TransactionQueryError(pog.PostgresqlError(
+    code: "25P02",
+    name: "in_failed_sql_transaction",
+    ..,
+  ))) =
+    pog.transaction(db.data, fn(db) {
+      insert_cat(db, "aborted-transaction")
+      // The error is ignored, but PostgreSQL aborts the transaction anyway
+      let _ = pog.query("SELECT * FROM unknown_table") |> pog.execute(db)
+      Ok(Nil)
+    })
+
+  assert cat_names(db.data, "aborted-transaction") == []
+
+  disconnect(db)
+}
+
+pub fn default_timeout_test() {
+  let name = process.new_name("pog_test")
+  let assert Ok(db) =
+    default_config(name)
+    |> pog.default_timeout(5)
+    |> pog.start
+  let sleep = fn(db, query) {
+    query
+    |> pog.returning(decode.at([0], decode.string))
+    |> pog.execute(db)
+  }
+  let query =
+    pog.query("select sub.ret from (select pg_sleep(0.05), 'OK' as ret) as sub")
+
+  assert sleep(db.data, query) == Error(pog.QueryTimeout)
+  assert sleep(pog.named_connection(name), query) == Error(pog.QueryTimeout)
+  assert sleep(db.data, pog.timeout(query, 1000)) == Ok(pog.Returned(1, ["OK"]))
+
+  disconnect(db)
+}
+
+pub fn transaction_default_timeout_test() {
+  let name = process.new_name("pog_test")
+  let assert Ok(db) =
+    default_config(name)
+    |> pog.default_timeout(5)
+    |> pog.start
+
+  let assert Error(pog.TransactionQueryError(pog.QueryTimeout)) =
+    pog.transaction(db.data, fn(db) {
+      pog.query("select pg_sleep(0.05)")
+      |> pog.execute(db)
+    })
+
+  disconnect(db)
+}

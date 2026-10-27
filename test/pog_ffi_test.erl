@@ -54,3 +54,13 @@ ssl_verified_pool_options_test() ->
     ?assertEqual("db.test", proplists:get_value(server_name_indication, SslOptions)),
     ?assertMatch([_ | _], proplists:get_value(cacerts, SslOptions)),
     ?assertMatch([{match_fun, _}], proplists:get_value(customize_hostname_check, SslOptions)).
+
+%% pgo returns this error when the checkout deadline expires between the pool
+%% handing over a connection and the caller using it. The race is too narrow to
+%% be reproduced reliably, so the conversion is tested directly.
+deadline_reached_in_queue_error_test() ->
+    Error = "connection not available because deadline reached while in queue",
+    ?assertEqual(query_timeout, pog_ffi:convert_error(Error)).
+
+query_timeout_error_test() ->
+    ?assertEqual(query_timeout, pog_ffi:convert_error(query_timeout)).

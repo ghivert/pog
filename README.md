@@ -120,11 +120,25 @@ and read them!
 ## Timeout
 
 By default, every pog query has a 5 seconds timeout, and every query taking more
-than 5 seconds will automatically be aborted. That behaviour can be changed
-query by query with `timeout`.
+than 5 seconds will automatically be aborted. That behaviour can be changed for
+the whole pool with `default_timeout` on `Config`, or query by query with
+`timeout`.
 
-Transactions are currently limited to 5 seconds, and `timeout` has no effect on
-queries run inside a transaction.
+A transaction has to complete within the `default_timeout` of the pool, all of
+its queries included. `timeout` has no effect on queries run inside a
+transaction.
+
+`default_timeout` is read once when the pool starts, and stays the same for the
+lifetime of the pool. Restart the pool to change it.
+
+## About numeric
+
+Postgres `numeric` values are exact decimals, while Gleam `Float` values are
+64-bit floats, with only 15 to 17 significant digits. `pog.float` and
+`pog.numeric_decoder` are fine for most values, but lose precision on large
+ones: `pog.float(12345678901234567.89)` is stored as `12345678901234568`.
+When every digit matters, write the value with `pog.text("12345678901234567.89")`,
+and read it as a string by casting it in SQL (`amount::text`).
 
 ## Rows as maps
 
