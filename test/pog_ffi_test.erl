@@ -64,3 +64,12 @@ deadline_reached_in_queue_error_test() ->
 
 query_timeout_error_test() ->
     ?assertEqual(query_timeout, pog_ffi:convert_error(query_timeout)).
+
+unexpected_error_test() ->
+    ?assertEqual({unexpected_error, <<"something_new">>}, pog_ffi:convert_error(something_new)).
+
+unexpected_protocol_error_test() ->
+    ?assertEqual(
+        {unexpected_error, <<"{pgo_protocol,{unknown,1}}">>},
+        pog_ffi:convert_error({pgo_protocol, {unknown, 1}})
+    ).

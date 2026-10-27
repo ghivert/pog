@@ -118,9 +118,11 @@ convert_error(query_timeout) -> query_timeout;
 convert_error("connection not available because deadline reached while in queue") -> query_timeout;
 convert_error({pgo_protocol, Error}) -> protocol_error(Error);
 convert_error({pgsql_error, Error}) -> postgresql_error(Error);
-convert_error(#{error := badarg_encoding} = Error) -> encoding_error(Error).
+convert_error(#{error := badarg_encoding} = Error) -> encoding_error(Error);
+convert_error(Error) -> unexpected_error(Error).
 
-protocol_error({parameters, Expected, Got}) -> {unexpected_argument_count, Expected, Got}.
+protocol_error({parameters, Expected, Got}) -> {unexpected_argument_count, Expected, Got};
+protocol_error(Error) -> unexpected_error({pgo_protocol, Error}).
 
 postgresql_error(#{message := Message, constraint := Constraint} = Error) ->
     {constraint_violated, Message, Constraint, maps:get(detail, Error, <<>>)};
@@ -131,6 +133,9 @@ encoding_error(Error) ->
     TypeInfo = maps:get(type_info, Error),
     Got = list_to_binary(io_lib:format("~p", [maps:get(value, Error)])),
     {unexpected_argument_type, TypeInfo#type_info.name, Got}.
+
+unexpected_error(Error) ->
+    {unexpected_error, unicode:characters_to_binary(io_lib:format("~tp", [Error]))}.
 
 error_code_name(Code) ->
     case pog:error_code_name(Code) of

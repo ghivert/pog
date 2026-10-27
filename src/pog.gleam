@@ -626,6 +626,9 @@ pub type QueryError {
   /// No connection was available to execute the query. This may be due to
   /// invalid connection details such as an invalid username or password.
   ConnectionUnavailable
+  /// pgo returned an error that pog does not know how to convert. `reason`
+  /// holds the Erlang representation of that error.
+  UnexpectedError(reason: String)
 }
 
 pub opaque type Query(row_type) {

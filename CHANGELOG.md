@@ -17,6 +17,8 @@
   longer hides the original crash.
 - pgo's checkout deadline errors are now returned as `QueryTimeout` instead of
   crashing.
+- Added the `UnexpectedError` variant to `QueryError`, returned for errors
+  pog does not know how to convert, instead of crashing.
 
 ## v4.1.0 - 2025-07-14
 

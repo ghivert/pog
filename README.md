@@ -7,8 +7,20 @@ A PostgreSQL database client for Gleam, based on [PGO][erlang-pgo].
 [![Package Version](https://img.shields.io/hexpm/v/pog)](https://hex.pm/packages/pog)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/pog/)
 
-```gleam
-gleam add pog@4
+> [!WARNING]
+> This repository is an alternative version of
+> [`lpil/pog`](https://github.com/lpil/pog), mostly vibe-coded with Claude to
+> solve the issues encountered at Steerlab. Only use it if you are confident
+> with vibe-coded code and, in any case, after auditing the code, as you should
+> for any dependency. That being said, this package is used in production at
+> Steerlab.
+
+This version is not published on Hex. Add it to your `gleam.toml` as a git
+dependency:
+
+```toml
+[dependencies]
+pog = { git = "https://github.com/ghivert/pog.git", ref = "main" }
 ```
 
 Add a pool to your OTP supervision tree, before any siblings that will need to
