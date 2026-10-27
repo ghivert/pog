@@ -1,10 +1,10 @@
 name = "pog"
-version = "4.1.0"
+version = "5.0.0"
 gleam = ">= 1.11.0"
 licences = ["Apache-2.0"]
 description = "A PostgreSQL database client for Gleam, based on PGO"
 
-repository = { type = "github", user = "lpil", repo = "pog" }
+repository = { type = "github", user = "ghivert", repo = "pog" }
 links = [
   { title = "Website", href = "https://gleam.run" },
   { title = "Sponsor", href = "https://github.com/sponsors/lpil" },

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v5.0.0 - 2026-10-27
 
 - Fixed a bug where `rows_as_map` was not respected inside transactions.
 - The minimum supported version of `pgo` is now v0.20.0.
