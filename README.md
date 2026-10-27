@@ -4,9 +4,6 @@ A PostgreSQL database client for Gleam, based on [PGO][erlang-pgo].
 
 [erlang-pgo]: https://github.com/erleans/pgo
 
-[![Package Version](https://img.shields.io/hexpm/v/pog)](https://hex.pm/packages/pog)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/pog/)
-
 > [!WARNING]
 > This repository is an alternative version of
 > [`lpil/pog`](https://github.com/lpil/pog), mostly vibe-coded with Claude to
@@ -215,7 +212,7 @@ attacks, you should always try to use the most secured setting.
 
 You tried to setup a secured connection, but it does not work? Your container
 is not able to find the correct CA certificate?
-[Take a look at Solving SSL issues](https://hexdocs.pm/pog/docs/solving-ssl-issues.html)
+[Take a look at Solving SSL issues](docs/solving-ssl-issues.md)
 
 ## History
 
