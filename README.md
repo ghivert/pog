@@ -120,11 +120,17 @@ pub fn read_connection_uri(name: Name(pog.Message)) -> Result(pog.Config, Nil) {
 
 ## About JSON
 
-In Postgres, you can define a type `json` or `jsonb`. Such a type can be queried
-in SQL, but Postgres returns it as a simple string, and accepts it as a simple string!
-When writing or reading a JSON, you can simply use
-`pog.text(json.to_string(my_json))` and `decode.string` to respectively write
-and read them!
+In Postgres, you can define a type `json` or `jsonb`. Write them with
+`pog.json`, which takes a `json.Json` from
+[`gleam_json`](https://hexdocs.pm/gleam_json/), and read them with
+`decode.string`, as Postgres returns them as strings. Parse the string with
+`json.parse` to decode its content.
+
+## About UUID
+
+Write `uuid` values with `pog.uuid`, which takes the text form of a UUID.
+Postgres returns `uuid` columns as 16 bytes, to read with `decode.bit_array`.
+To read them as strings, cast them in SQL (`id::text`) and use `decode.string`.
 
 ## Timeout
 

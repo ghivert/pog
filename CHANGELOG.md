@@ -26,6 +26,8 @@
   `PostgresqlError` the `position` of the error in the query.
 - Reading a column of a type pog cannot decode, such as `xml`, now returns an
   `UnexpectedError` instead of crashing.
+- Added `uuid` and `json` to send UUID and JSON values. `json` takes a
+  `json.Json` from `gleam_json`, which is now a dependency.
 - `Returned.count` is now always an `Int`. Commands for which PostgreSQL gives
   no count, such as `SHOW` or `CREATE TABLE`, use the number of returned rows.
 

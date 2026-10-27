@@ -3,6 +3,7 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/erlang/charlist.{type Charlist}
 import gleam/erlang/process
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
@@ -1166,7 +1167,7 @@ pub fn calendar_time_of_day_test() {
   disconnect(db)
 }
 
-/// The README recommends `pog.text` for these types.
+/// Postgres also accepts these types in their text form.
 pub fn text_encoded_types_test() {
   let db = start_default()
   let text = fn(sql, value) {
@@ -1182,6 +1183,54 @@ pub fn text_encoded_types_test() {
     == Ok(pog.Returned(1, ["b"]))
   assert text("SELECT $1::numeric::text", "12345678901234567.89")
     == Ok(pog.Returned(1, ["12345678901234567.89"]))
+
+  disconnect(db)
+}
+
+pub fn uuid_test() {
+  let db = start_default()
+  let uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+
+  assert pog.query("SELECT $1::uuid::text")
+    |> pog.parameter(pog.uuid(uuid))
+    |> pog.returning(decode.at([0], decode.string))
+    |> pog.execute(db.data)
+    == Ok(pog.Returned(1, [uuid]))
+
+  assert pog.query("SELECT $1::uuid")
+    |> pog.parameter(pog.uuid(uuid))
+    |> pog.returning(decode.at([0], decode.bit_array))
+    |> pog.execute(db.data)
+    == Ok(pog.Returned(1, [<<0xa0eebc999c0b4ef8bb6d6bb9bd380a11:128>>]))
+
+  let assert Error(_) =
+    pog.query("SELECT $1::uuid")
+    |> pog.parameter(pog.uuid("not a uuid"))
+    |> pog.execute(db.data)
+
+  disconnect(db)
+}
+
+pub fn json_test() {
+  let db = start_default()
+  let value =
+    json.object([
+      #("name", json.string("neo")),
+      #("colors", json.array(["black"], json.string)),
+    ])
+  let select = fn(sql) {
+    pog.query(sql)
+    |> pog.parameter(pog.json(value))
+    |> pog.returning(decode.at([0], decode.string))
+    |> pog.execute(db.data)
+  }
+
+  assert select("SELECT ($1::jsonb)->>'name'") == Ok(pog.Returned(1, ["neo"]))
+  assert select("SELECT ($1::json)->'colors'->>0")
+    == Ok(pog.Returned(1, ["black"]))
+
+  let assert Ok(pog.Returned(rows: [jsonb], ..)) = select("SELECT $1::jsonb")
+  assert json.parse(jsonb, decode.at(["name"], decode.string)) == Ok("neo")
 
   disconnect(db)
 }

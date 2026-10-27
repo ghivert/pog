@@ -11,6 +11,7 @@ import gleam/erlang/process.{type Name, type Pid}
 import gleam/erlang/reference.{type Reference}
 import gleam/float
 import gleam/int
+import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -418,6 +419,23 @@ pub fn text(a: String) -> Value
 
 @external(erlang, "pog_ffi", "coerce")
 pub fn bytea(a: BitArray) -> Value
+
+/// A UUID, given in its text form, such as
+/// `"a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"`.
+///
+/// Selected `uuid` columns are returned as 16 bytes, to be decoded with
+/// `decode.bit_array`. Cast them to text in SQL (`id::text`) to read them as
+/// strings instead.
+@external(erlang, "pog_ffi", "coerce")
+pub fn uuid(a: String) -> Value
+
+/// A JSON value, for `json` and `jsonb` columns.
+///
+/// Selected `json` and `jsonb` columns are returned as strings, to be decoded
+/// with `decode.string` and parsed with `json.parse`.
+pub fn json(json: Json) -> Value {
+  coerce_value(json.to_string(json))
+}
 
 pub fn array(converter: fn(a) -> Value, values: List(a)) -> Value {
   list.map(values, converter)
