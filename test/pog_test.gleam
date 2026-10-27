@@ -559,6 +559,31 @@ pub fn expected_maps_test() {
   disconnect(db)
 }
 
+pub fn expected_maps_in_transaction_test() {
+  let name = process.new_name("pog_test")
+  let assert Ok(db) =
+    pog.Config(..default_config(name), rows_as_map: True)
+    |> pog.start
+
+  let sql =
+    "
+    INSERT INTO
+      cats
+    VALUES
+      (DEFAULT, 'neo', true, ARRAY ['black'], '2022-10-10 11:30:30', '2020-03-04')
+    RETURNING
+      name"
+
+  let assert Ok(pog.Returned(1, ["neo"])) =
+    pog.transaction(db.data, fn(conn) {
+      pog.query(sql)
+      |> pog.returning(decode.at(["name"], decode.string))
+      |> pog.execute(conn)
+    })
+
+  disconnect(db)
+}
+
 pub fn transaction_commit_test() {
   let db = start_default()
   let id_decoder = decode.at([0], decode.int)

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed a bug where `rows_as_map` was not respected inside transactions.
+
 ## v4.1.0 - 2025-07-14
 
 - Added a `numeric_decoder` to decode numeric types coming from postgres.

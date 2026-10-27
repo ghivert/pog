@@ -4,6 +4,7 @@
 
 -include_lib("pog/include/pog_Config.hrl").
 -include_lib("pg_types/include/pg_types.hrl").
+-include_lib("pgo/src/pgo_internal.hrl").
 
 null() ->
     null.
@@ -85,7 +86,8 @@ start(Config) ->
 query(Pool, Sql, Arguments, Timeout) ->
     Res = case Pool of
         {single_connection, Conn} ->
-            pgo_handler:extended_query(Conn, Sql, Arguments, #{});
+            #conn{decode_opts = DecodeOpts} = Conn,
+            pgo_handler:extended_query(Conn, Sql, Arguments, DecodeOpts, #{});
         {pool, Name} ->
             Options = #{
                 pool => Name,
@@ -102,7 +104,8 @@ query(Pool, Sql, Arguments, Timeout) ->
     end.
 
 query_extended(Conn, Sql) ->
-    case pgo_handler:extended_query(Conn, Sql, [], #{queue_time => undefined}) of
+    #conn{decode_opts = DecodeOpts} = Conn,
+    case pgo_handler:extended_query(Conn, Sql, [], DecodeOpts, #{queue_time => undefined}) of
         #{rows := Rows, num_rows := NumRows} ->
             {ok, {NumRows, Rows}};
 
