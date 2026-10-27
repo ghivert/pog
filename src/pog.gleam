@@ -920,8 +920,8 @@ fn seconds_decoder() -> decode.Decoder(#(Int, Int)) {
     |> decode.map(fn(f) {
       let floored = float.floor(f)
       let seconds = float.round(floored)
-      let microseconds = float.round({ f -. floored } *. 1_000_000_000.0)
-      #(seconds, microseconds)
+      let nanoseconds = float.round({ f -. floored } *. 1_000_000_000.0)
+      #(seconds, nanoseconds)
     })
   }
   decode.one_of(int, [float])
