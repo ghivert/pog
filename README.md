@@ -74,8 +74,8 @@ pub fn run(db: pog.Connection) {
     |> pog.execute(db)
 
   // And then do something with the returned results
-  assert data.count == 2
-  assert data.rows == [#("Nubi", 3, "black", ["Al", "Cutlass"])])
+  assert data.count == 1
+  assert data.rows == [#("Nubi", 3, "black", ["Al", "Cutlass"])]
 }
 ```
 
@@ -85,7 +85,10 @@ Configuring a Postgres connection is done by using `Config` type in `pog`.
 To facilitate connection, and to provide easy integration with the rest of the
 Postgres ecosystem, `pog` provides handling of
 [connection URI as defined by Postgres](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING-URIS).
-Shape of connection URI is `postgresql://[username:password@][host:port][/dbname][?query]`.
+Shape of connection URI is
+`postgresql://username[:password]@host[:port]/dbname[?sslmode=mode]`. The
+username is required, username and password can be percent-encoded, the port
+defaults to 5432, and query parameters other than `sslmode` are ignored.
 Call `pog.url_config` with your connection URI, and in case it's correct
 against the Postgres standard, your `Config` will be automatically generated!
 
@@ -95,6 +98,7 @@ connection URI from the environment.
 ```gleam
 import envoy
 import gleam/erlang/process.{type Name}
+import gleam/result
 import pog
 
 /// Read the DATABASE_URL environment variable and then
@@ -107,8 +111,8 @@ pub fn read_connection_uri(name: Name(pog.Message)) -> Result(pog.Config, Nil) {
 
 ## About JSON
 
-In Postgres, you can define a type `json` or `jsonb`. Such a type can be query
-in SQL, but Postgres returns it a simple string, and accepts it as a simple string!
+In Postgres, you can define a type `json` or `jsonb`. Such a type can be queried
+in SQL, but Postgres returns it as a simple string, and accepts it as a simple string!
 When writing or reading a JSON, you can simply use
 `pog.text(json.to_string(my_json))` and `decode.string` to respectively write
 and read them!
@@ -117,11 +121,10 @@ and read them!
 
 By default, every pog query has a 5 seconds timeout, and every query taking more
 than 5 seconds will automatically be aborted. That behaviour can be changed
-through the usage of `default_timeout` or `timeout`. `default_timeout` should be
-used on `Config`, and defines the timeout that will be used for every query
-using that connection, while `timeout` handles timeout query by query. If you have
-one query taking more time than your default timeout to complete, you can override
-that behaviour specifically for that one.
+query by query with `timeout`.
+
+Transactions are currently limited to 5 seconds, and `timeout` has no effect on
+queries run inside a transaction.
 
 ## Rows as maps
 
@@ -169,6 +172,8 @@ In Postgres, conventions used, including in connection URI are as follow:
 
 - Flag used to indicate SSL state is named `sslmode`.
 - `disable` disables SSL connection.
+- `allow` and `prefer` let the client fall back to another mode depending on
+  the server. `pog` cannot fall back, and disables SSL for them.
 - `require` enables SSL connection, but does not check CA certificates.
 - `verify-ca` or `verify-full` enables SSL connection, and check for CA certificates.
 

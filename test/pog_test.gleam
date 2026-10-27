@@ -1,8 +1,11 @@
 import exception
 import gleam/dynamic/decode.{type Decoder}
+import gleam/erlang/charlist.{type Charlist}
 import gleam/erlang/process
+import gleam/int
 import gleam/option.{None, Some}
 import gleam/otp/actor
+import gleam/result
 import gleam/time/calendar
 import gleam/time/timestamp
 import gleeunit
@@ -24,14 +27,28 @@ fn start_default() -> actor.Started(pog.Connection) {
   started
 }
 
+/// Connection settings are read from the same environment variables as
+/// `psql` and `test/reset_db.sh`, falling back to a local Postgres.
 fn default_config(name) {
+  let assert Ok(port) = int.parse(env("PGPORT", "5432"))
   pog.Config(
     ..pog.default_config(name),
+    host: env("PGHOST", "127.0.0.1"),
+    port:,
+    user: env("PGUSER", "postgres"),
+    password: Some(env("PGPASSWORD", "postgres")),
     database: "gleam_pog_test",
-    password: Some("postgres"),
     pool_size: 1,
   )
 }
+
+fn env(name: String, default: String) -> String {
+  getenv(charlist.from_string(name), charlist.from_string(default))
+  |> charlist.to_string
+}
+
+@external(erlang, "os", "getenv")
+fn getenv(name: Charlist, default: Charlist) -> Charlist
 
 pub fn url_config_everything_test() {
   let name = process.new_name("pog_test")
@@ -93,6 +110,57 @@ pub fn url_config_path_slash_test() {
   let name = process.new_name("pog_test")
   assert pog.url_config(name, "postgres://u:p@db.test:1234/my_db/foo")
     == Error(Nil)
+}
+
+pub fn url_config_percent_encoded_userinfo_test() {
+  let name = process.new_name("pog_test")
+  let expected =
+    pog.default_config(name)
+    |> pog.host("db.test")
+    |> pog.database("my_db")
+    |> pog.user("us@r")
+    |> pog.password(Some("p@ss/word"))
+  assert pog.url_config(name, "postgres://us%40r:p%40ss%2Fword@db.test/my_db")
+    == Ok(expected)
+}
+
+pub fn url_config_colon_in_password_test() {
+  let name = process.new_name("pog_test")
+  let expected =
+    pog.default_config(name)
+    |> pog.host("db.test")
+    |> pog.database("my_db")
+    |> pog.user("u")
+    |> pog.password(Some("p:a:ss"))
+  assert pog.url_config(name, "postgres://u:p:a:ss@db.test/my_db")
+    == Ok(expected)
+}
+
+pub fn url_config_query_without_sslmode_test() {
+  let name = process.new_name("pog_test")
+  let expected =
+    pog.default_config(name)
+    |> pog.host("db.test")
+    |> pog.database("my_db")
+    |> pog.user("u")
+  assert pog.url_config(name, "postgres://u@db.test/my_db?application_name=app")
+    == Ok(expected)
+}
+
+pub fn url_config_sslmode_test() {
+  let name = process.new_name("pog_test")
+  let url = fn(mode) { "postgres://u@db.test/my_db?sslmode=" <> mode }
+  let ssl = fn(mode) {
+    pog.url_config(name, url(mode))
+    |> result.map(fn(config) { config.ssl })
+  }
+  assert ssl("disable") == Ok(pog.SslDisabled)
+  assert ssl("allow") == Ok(pog.SslDisabled)
+  assert ssl("prefer") == Ok(pog.SslDisabled)
+  assert ssl("require") == Ok(pog.SslUnverified)
+  assert ssl("verify-ca") == Ok(pog.SslVerified)
+  assert ssl("verify-full") == Ok(pog.SslVerified)
+  assert ssl("unknown") == Error(Nil)
 }
 
 pub fn inserting_new_rows_test() {

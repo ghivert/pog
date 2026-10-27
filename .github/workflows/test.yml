@@ -9,7 +9,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # container: ubuntu:20.04
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGPASSWORD: postgres
+      PGUSER: postgres
     services:
       postgres:
         image: postgres
@@ -23,19 +27,13 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
       - uses: erlef/setup-beam@v1
         with:
           otp-version: "28"
-          gleam-version: "1.11.1"
+          gleam-version: "1.19.2"
           rebar3-version: "3"
-          # ImageOS: ubuntu20
       - run: gleam build
       - run: ./test/reset_db.sh
-        env:
-          PGHOST: localhost
-          PGPORT: 5432
-          PGPASSWORD: postgres
-          PGUSER: postgres
       - run: gleam test
       - run: gleam format --check src test

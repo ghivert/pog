@@ -61,9 +61,11 @@ pub type Config {
     ssl: Ssl,
     /// (default: []): List of 2-tuples, where key and value must be binary
     /// strings. You can include any Postgres connection parameter here, such as
-    /// `#("application_name", "myappname")` and `#("timezone", "GMT")`.
+    /// `#("timezone", "GMT")` or `#("search_path", "my_schema")`.
+    /// `application_name` cannot be set this way, as pgo always sets it to the
+    /// name of the Erlang node.
     connection_parameters: List(#(String, String)),
-    /// (default: 1): Number of connections to keep open with the database
+    /// (default: 10): Number of connections to keep open with the database.
     pool_size: Int,
     /// (default: 50) Checking out connections is handled through a queue. If it
     /// takes longer than queue_target to get out of the queue for longer than
@@ -75,15 +77,15 @@ pub type Config {
     /// (default: 1000): The database is pinged every idle_interval when the
     /// connection is idle.
     idle_interval: Int,
-    /// trace (default: False): pgo is instrumented with [OpenCensus][1] and
+    /// (default: False): pgo is instrumented with [OpenTelemetry][1] and
     /// when this option is true a span will be created (if sampled).
     ///
-    /// [1]: https://opencensus.io/
+    /// [1]: https://opentelemetry.io
     trace: Bool,
     /// (default: Ipv4) Which internet protocol to use for this connection
     ip_version: IpVersion,
-    /// (default: False) By default, pgo will return a n-tuple, in the order of the query.
-    /// By setting `rows_as_map` to `True`, the result will be `Dict`.
+    /// (default: False): By default, pgo will return a n-tuple, in the order of
+    /// the query. By setting `rows_as_map` to `True`, the result will be `Dict`.
     rows_as_map: Bool,
   )
 }
@@ -137,13 +139,15 @@ pub fn password(config: Config, password: Option(String)) -> Config {
 
 /// Whether to use SSL or not.
 ///
-/// (default: False)
+/// (default: SslDisabled)
 pub fn ssl(config: Config, ssl: Ssl) -> Config {
   Config(..config, ssl:)
 }
 
-/// Any Postgres connection parameter here, such as
-/// `"application_name: myappname"` and `"timezone: GMT"`
+/// Any Postgres connection parameter, such as `timezone` or `search_path`.
+///
+/// `application_name` cannot be set this way, as pgo always sets it to the
+/// name of the Erlang node.
 pub fn connection_parameter(
   config: Config,
   name name: String,
@@ -218,8 +222,8 @@ pub type IpVersion {
   Ipv6
 }
 
-/// The default configuration for a connection pool, with a single connection.
-/// You will likely want to increase the size of the pool for your application.
+/// The default configuration for a connection pool, with 10 connections.
+/// You will likely want to adjust the size of the pool for your application.
 ///
 pub fn default_config(pool_name pool_name: Name(Message)) -> Config {
   Config(
@@ -242,6 +246,13 @@ pub fn default_config(pool_name pool_name: Name(Message)) -> Config {
 }
 
 /// Parse a database url into configuration that can be used to start a pool.
+///
+/// The url must look like
+/// `postgres://user[:password]@host[:port]/database[?sslmode=mode]`, where
+/// `postgresql://` can be used instead of `postgres://`. User and password can
+/// be percent-encoded. The port defaults to 5432. Query parameters other than
+/// `sslmode` are ignored.
+///
 pub fn url_config(
   name: Name(Message),
   database_url: String,
@@ -287,38 +298,48 @@ pub fn url_config(
   }
 }
 
-/// Expects `userinfo` as `"username"` or `"username:password"`. Fails otherwise.
+/// Expects `userinfo` as `"username"` or `"username:password"`, where both
+/// parts can be percent-encoded. Everything after the first `:` is considered
+/// as the password.
 fn extract_user_password(
   userinfo: String,
 ) -> Result(#(String, Option(String)), Nil) {
-  case string.split(userinfo, ":") {
-    [user] -> Ok(#(user, None))
-    [user, password] -> Ok(#(user, Some(password)))
-    _ -> Error(Nil)
+  case string.split_once(userinfo, ":") {
+    Ok(#(user, password)) -> {
+      use user <- result.try(uri.percent_decode(user))
+      use password <- result.try(uri.percent_decode(password))
+      Ok(#(user, Some(password)))
+    }
+    Error(Nil) -> {
+      use user <- result.try(uri.percent_decode(userinfo))
+      Ok(#(user, None))
+    }
   }
 }
 
-/// Expects `sslmode` to be `require`, `verify-ca`, `verify-full` or `disable`.
-///
-/// If `sslmode` is set, but not one of those value, fails.
+/// Reads `sslmode` from the query parameters, ignoring any other parameter.
 ///
 /// If `sslmode` is `verify-ca` or `verify-full`, returns `SslVerified`.
 ///
 /// If `sslmode` is `require`, returns `SslUnverified`.
 ///
-/// If `sslmode` is unset, returns `SslDisabled`.
+/// If `sslmode` is `disable`, `allow`, `prefer` or unset, returns `SslDisabled`.
+/// `allow` and `prefer` let libpq fall back to another mode depending on the
+/// server, which pog cannot do, so pog does not use SSL for them.
 ///
-fn extract_ssl_mode(query: option.Option(String)) -> Result(Ssl, Nil) {
+/// Fails for any other value of `sslmode`.
+///
+fn extract_ssl_mode(query: Option(String)) -> Result(Ssl, Nil) {
   case query {
-    option.None -> Ok(SslDisabled)
-    option.Some(query) -> {
+    None -> Ok(SslDisabled)
+    Some(query) -> {
       use query <- result.try(uri.parse_query(query))
-      use sslmode <- result.try(list.key_find(query, "sslmode"))
-      case sslmode {
-        "require" -> Ok(SslUnverified)
-        "verify-ca" | "verify-full" -> Ok(SslVerified)
-        "disable" -> Ok(SslDisabled)
-        _ -> Error(Nil)
+      case list.key_find(query, "sslmode") {
+        Ok("require") -> Ok(SslUnverified)
+        Ok("verify-ca") | Ok("verify-full") -> Ok(SslVerified)
+        Ok("disable") | Ok("allow") | Ok("prefer") | Error(Nil) ->
+          Ok(SslDisabled)
+        Ok(_) -> Error(Nil)
       }
     }
   }
@@ -354,7 +375,9 @@ fn start_tree(config: Config) -> Result(Pid, dynamic.Dynamic)
 /// or it cannot connect for another reason it will continue to attempt to
 /// connect, and any queries made using the connection pool will fail.
 ///
-pub fn supervised(config: Config) -> supervision.ChildSpecification(Connection) {
+pub fn supervised(
+  config: Config,
+) -> supervision.ChildSpecification(Connection) {
   supervision.supervisor(fn() { start(config) })
 }
 
@@ -568,7 +591,6 @@ pub fn parameter(query: Query(t1), parameter: Value) -> Query(t1) {
 }
 
 /// Use a custom timeout for the query, in milliseconds.
-/// the default connection timeout.
 ///
 /// If this function is not used to give a timeout then default of 5000 ms is
 /// used.

@@ -4,6 +4,9 @@
 
 - Fixed a bug where `rows_as_map` was not respected inside transactions.
 - The minimum supported version of `pgo` is now v0.20.0.
+- `url_config` now accepts query parameters other than `sslmode`, the `allow`
+  and `prefer` SSL modes, percent-encoded user and password, and passwords
+  containing `:`.
 
 ## v4.1.0 - 2025-07-14
 
