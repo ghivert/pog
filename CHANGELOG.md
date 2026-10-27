@@ -19,6 +19,15 @@
   crashing.
 - Added the `UnexpectedError` variant to `QueryError`, returned for errors
   pog does not know how to convert, instead of crashing.
+- `ConstraintViolated` now has `code` and `name`, to tell which kind of
+  constraint failed, and `detail` is now an `Option(String)`.
+- `ConstraintViolated` and `PostgresqlError` now expose the `detail`, `hint`,
+  `schema`, `table` and `column` fields sent by PostgreSQL, and
+  `PostgresqlError` the `position` of the error in the query.
+- Reading a column of a type pog cannot decode, such as `xml`, now returns an
+  `UnexpectedError` instead of crashing.
+- `Returned.count` is now always an `Int`. Commands for which PostgreSQL gives
+  no count, such as `SHOW` or `CREATE TABLE`, use the number of returned rows.
 
 ## v4.1.0 - 2025-07-14
 

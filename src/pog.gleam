@@ -608,11 +608,43 @@ fn run_query_extended(
 
 pub type QueryError {
   /// The query failed as a database constraint would have been violated by the
-  /// change.
-  ConstraintViolated(message: String, constraint: String, detail: String)
-  /// The query failed within the database.
+  /// change. `code` and `name` tell which kind of constraint failed, for
+  /// example `23505` and `unique_violation`, or `23503` and
+  /// `foreign_key_violation`.
   /// https://www.postgresql.org/docs/current/errcodes-appendix.html
-  PostgresqlError(code: String, name: String, message: String)
+  ConstraintViolated(
+    code: String,
+    name: String,
+    message: String,
+    constraint: String,
+    detail: Option(String),
+    hint: Option(String),
+    schema: Option(String),
+    table: Option(String),
+    column: Option(String),
+  )
+  /// The query failed within the database.
+  ///
+  /// - `detail` and `hint` give more context about the error, and how to fix
+  ///   it.
+  /// - `position` is the position of the error in the query, as a 1-based
+  ///   index of characters, for example for syntax errors.
+  /// - `schema`, `table` and `column` name the object related to the error.
+  ///
+  /// PostgreSQL only sets them when they are relevant for the error.
+  /// https://www.postgresql.org/docs/current/errcodes-appendix.html
+  /// https://www.postgresql.org/docs/current/protocol-error-fields.html
+  PostgresqlError(
+    code: String,
+    name: String,
+    message: String,
+    detail: Option(String),
+    hint: Option(String),
+    position: Option(Int),
+    schema: Option(String),
+    table: Option(String),
+    column: Option(String),
+  )
   /// The number of arguments supplied did not match the number of parameters
   /// that the query has.
   UnexpectedArgumentCount(expected: Int, got: Int)

@@ -9,6 +9,7 @@
     commit/1,
     log_rollback_failure/1,
     convert_error/1,
+    convert_result/1,
     null/0,
     coerce/1
 ]).
@@ -82,15 +83,25 @@ checkout(Name) when is_atom(Name) ->
     end.
 
 query({single_connection, Conn}, Sql, Arguments, _Timeout) ->
-    convert_result(pgo:query(Sql, Arguments, #{}, Conn));
+    run(fun() -> pgo:query(Sql, Arguments, #{}, Conn) end);
 query({pool, Name}, Sql, Arguments, Timeout) ->
     Options = #{pool => Name, pool_options => [{timeout, query_timeout(Name, Timeout)}]},
-    convert_result(pgo:query(Sql, Arguments, Options)).
+    run(fun() -> pgo:query(Sql, Arguments, Options) end).
 
 query_timeout(_Name, {some, Timeout}) -> Timeout;
 query_timeout(Name, none) -> default_timeout(Name).
 
-query_extended(Conn, Sql) -> convert_result(pgo:query(Sql, [], #{}, Conn)).
+query_extended(Conn, Sql) -> run(fun() -> pgo:query(Sql, [], #{}, Conn) end).
+
+%% pgo raises when it cannot decode a value, for example for a column of a type
+%% pg_types does not support. pgo makes the connection usable again before
+%% raising, so the exception can safely be turned into an error.
+run(Query) ->
+    try Query() of
+        Result -> convert_result(Result)
+    catch
+        Class:Reason -> {error, unexpected_error({Class, Reason})}
+    end.
 
 %% PostgreSQL answers ROLLBACK to a COMMIT when the transaction has been
 %% aborted by a failing query.
@@ -103,14 +114,20 @@ commit(Conn) ->
 
 aborted_transaction_error() ->
     Message = <<"The transaction has been rolled back because a query failed inside it">>,
-    {postgresql_error, <<"25P02">>, <<"in_failed_sql_transaction">>, Message}.
+    postgresql_error(#{code => <<"25P02">>, message => Message}).
 
 log_rollback_failure(Error) ->
     logger:warning("pog: rollback failed after a crash in a transaction: ~p", [Error]),
     nil.
 
-convert_result(#{rows := Rows, num_rows := NumRows}) -> {ok, {NumRows, Rows}};
-convert_result({error, Error}) -> {error, convert_error(Error)}.
+convert_result(#{rows := Rows, num_rows := NumRows}) -> {ok, {row_count(NumRows, Rows), Rows}};
+convert_result({error, Error}) -> {error, convert_error(Error)};
+convert_result(Result) -> {error, unexpected_error(Result)}.
+
+%% pgo gives no count for commands like SHOW or CREATE TABLE, and returns `nil`
+%% or the kind of object created instead.
+row_count(NumRows, _Rows) when is_integer(NumRows) -> NumRows;
+row_count(_NumRows, Rows) -> length(Rows).
 
 convert_error(none_available) -> connection_unavailable;
 convert_error(closed) -> query_timeout;
@@ -124,10 +141,23 @@ convert_error(Error) -> unexpected_error(Error).
 protocol_error({parameters, Expected, Got}) -> {unexpected_argument_count, Expected, Got};
 protocol_error(Error) -> unexpected_error({pgo_protocol, Error}).
 
-postgresql_error(#{message := Message, constraint := Constraint} = Error) ->
-    {constraint_violated, Message, Constraint, maps:get(detail, Error, <<>>)};
-postgresql_error(#{code := Code, message := Message}) ->
-    {postgresql_error, Code, error_code_name(Code), Message}.
+postgresql_error(#{code := Code, message := Message, constraint := Constraint} = Error) ->
+    {constraint_violated, Code, error_code_name(Code), Message, Constraint,
+        optional(detail, Error), optional(hint, Error),
+        optional(schema, Error), optional(table, Error), optional(column, Error)};
+postgresql_error(#{code := Code, message := Message} = Error) ->
+    {postgresql_error, Code, error_code_name(Code), Message,
+        optional(detail, Error), optional(hint, Error), position(Error),
+        optional(schema, Error), optional(table, Error), optional(column, Error)}.
+
+optional(Field, Error) ->
+    case maps:find(Field, Error) of
+        {ok, Value} -> {some, Value};
+        error -> none
+    end.
+
+position(#{position := Position}) -> {some, binary_to_integer(Position)};
+position(_Error) -> none.
 
 encoding_error(Error) ->
     TypeInfo = maps:get(type_info, Error),

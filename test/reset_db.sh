@@ -13,6 +13,8 @@ WHERE NOT EXISTS (
 SQL
 
 psql -v "ON_ERROR_STOP=1" -d gleam_pog_test <<SQL
+DROP TABLE IF EXISTS pets;
+DROP TABLE IF EXISTS owners;
 DROP TABLE IF EXISTS cats;
 CREATE TABLE cats (
   id SERIAL PRIMARY KEY,
@@ -21,6 +23,14 @@ CREATE TABLE cats (
   colors VARCHAR(50)[] NOT NULL,
   last_petted_at TIMESTAMP NOT NULL,
   birthday DATE NOT NULL
+);
+CREATE TABLE owners (
+  id SERIAL PRIMARY KEY
+);
+CREATE TABLE pets (
+  id SERIAL PRIMARY KEY,
+  owner_id INTEGER NOT NULL REFERENCES owners(id),
+  age INTEGER NOT NULL CHECK (age >= 0)
 );
 SQL
 

@@ -73,3 +73,16 @@ unexpected_protocol_error_test() ->
         {unexpected_error, <<"{pgo_protocol,{unknown,1}}">>},
         pog_ffi:convert_error({pgo_protocol, {unknown, 1}})
     ).
+
+unexpected_result_test() ->
+    Expected = {error, {unexpected_error, <<"{throw,oops}">>}},
+    ?assertEqual(Expected, pog_ffi:convert_result({throw, oops})).
+
+count_without_number_test() ->
+    ?assertEqual({ok, {1, [{1}]}}, pog_ffi:convert_result(#{rows => [{1}], num_rows => nil})),
+    ?assertEqual({ok, {0, []}}, pog_ffi:convert_result(#{rows => [], num_rows => table})).
+
+postgresql_error_position_test() ->
+    Error = {pgsql_error, #{code => <<"42601">>, message => <<"m">>, position => <<"3">>}},
+    ?assertMatch({postgresql_error, _, _, _, none, none, {some, 3}, none, none, none},
+                 pog_ffi:convert_error(Error)).

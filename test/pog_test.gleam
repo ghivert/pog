@@ -3,8 +3,10 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/erlang/charlist.{type Charlist}
 import gleam/erlang/process
 import gleam/int
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
+import gleam/otp/static_supervisor
 import gleam/result
 import gleam/time/calendar
 import gleam/time/timestamp
@@ -256,12 +258,18 @@ pub fn invalid_sql_test() {
   let db = start_default()
   let sql = "select       select"
 
-  let assert Error(pog.PostgresqlError(code, name, message)) =
-    pog.query(sql) |> pog.execute(db.data)
-
-  assert code == "42601"
-  assert name == "syntax_error"
-  assert message == "syntax error at or near \"select\""
+  assert pog.query(sql) |> pog.execute(db.data)
+    == Error(pog.PostgresqlError(
+      code: "42601",
+      name: "syntax_error",
+      message: "syntax error at or near \"select\"",
+      detail: None,
+      hint: None,
+      position: Some(14),
+      schema: None,
+      table: None,
+      column: None,
+    ))
 
   disconnect(db)
 }
@@ -276,15 +284,18 @@ pub fn insert_constraint_error_test() {
       (900, 'bill', true, ARRAY ['black'], now(), '2020-03-04'),
       (900, 'felix', false, ARRAY ['black'], now(), '2020-03-05')"
 
-  let assert Error(pog.ConstraintViolated(message, constraint, detail)) =
-    pog.query(sql) |> pog.execute(db.data)
-
-  assert constraint == "cats_pkey"
-
-  assert detail == "Key (id)=(900) already exists."
-
-  assert message
-    == "duplicate key value violates unique constraint \"cats_pkey\""
+  assert pog.query(sql) |> pog.execute(db.data)
+    == Error(pog.ConstraintViolated(
+      code: "23505",
+      name: "unique_violation",
+      message: "duplicate key value violates unique constraint \"cats_pkey\"",
+      constraint: "cats_pkey",
+      detail: Some("Key (id)=(900) already exists."),
+      hint: None,
+      schema: Some("public"),
+      table: Some("cats"),
+      column: None,
+    ))
 
   disconnect(db)
 }
@@ -293,12 +304,18 @@ pub fn select_from_unknown_table_test() {
   let db = start_default()
   let sql = "SELECT * FROM unknown"
 
-  let assert Error(pog.PostgresqlError(code, name, message)) =
-    pog.query(sql) |> pog.execute(db.data)
-
-  assert code == "42P01"
-  assert name == "undefined_table"
-  assert message == "relation \"unknown\" does not exist"
+  assert pog.query(sql) |> pog.execute(db.data)
+    == Error(pog.PostgresqlError(
+      code: "42P01",
+      name: "undefined_table",
+      message: "relation \"unknown\" does not exist",
+      detail: None,
+      hint: None,
+      position: Some(15),
+      schema: None,
+      table: None,
+      column: None,
+    ))
 
   disconnect(db)
 }
@@ -311,13 +328,17 @@ pub fn insert_with_incorrect_type_test() {
         cats
       VALUES
         (true, true, true, true)"
-  let assert Error(pog.PostgresqlError(code, name, message)) =
-    pog.query(sql) |> pog.execute(db.data)
+  let assert Error(pog.PostgresqlError(
+    code: "42804",
+    name: "datatype_mismatch",
+    message:,
+    hint:,
+    ..,
+  )) = pog.query(sql) |> pog.execute(db.data)
 
-  assert code == "42804"
-  assert name == "datatype_mismatch"
   assert message
     == "column \"id\" is of type integer but expression is of type boolean"
+  assert hint == Some("You will need to rewrite or cast the expression.")
 
   disconnect(db)
 }
@@ -872,4 +893,219 @@ pub fn transaction_default_timeout_test() {
     })
 
   disconnect(db)
+}
+
+pub fn foreign_key_constraint_error_test() {
+  let db = start_default()
+
+  assert pog.query("INSERT INTO pets (owner_id, age) VALUES (999, 1)")
+    |> pog.execute(db.data)
+    == Error(pog.ConstraintViolated(
+      code: "23503",
+      name: "foreign_key_violation",
+      message: "insert or update on table \"pets\" violates foreign key constraint \"pets_owner_id_fkey\"",
+      constraint: "pets_owner_id_fkey",
+      detail: Some("Key (owner_id)=(999) is not present in table \"owners\"."),
+      hint: None,
+      schema: Some("public"),
+      table: Some("pets"),
+      column: None,
+    ))
+
+  disconnect(db)
+}
+
+pub fn check_constraint_error_test() {
+  let db = start_default()
+  let assert Ok(pog.Returned(rows: [owner_id], ..)) =
+    pog.query("INSERT INTO owners DEFAULT VALUES RETURNING id")
+    |> pog.returning(decode.at([0], decode.int))
+    |> pog.execute(db.data)
+
+  let assert Error(pog.ConstraintViolated(
+    code: "23514",
+    name: "check_violation",
+    constraint: "pets_age_check",
+    table: Some("pets"),
+    ..,
+  )) =
+    pog.query("INSERT INTO pets (owner_id, age) VALUES ($1, -1)")
+    |> pog.parameter(pog.int(owner_id))
+    |> pog.execute(db.data)
+
+  disconnect(db)
+}
+
+pub fn not_null_error_test() {
+  let db = start_default()
+
+  let assert Error(pog.PostgresqlError(
+    code: "23502",
+    name: "not_null_violation",
+    table: Some("cats"),
+    column: Some("name"),
+    ..,
+  )) =
+    pog.query("INSERT INTO cats (id) VALUES (DEFAULT)")
+    |> pog.execute(db.data)
+
+  disconnect(db)
+}
+
+pub fn unsupported_column_type_test() {
+  let db = start_default()
+
+  let assert Error(pog.UnexpectedError(_)) =
+    pog.query("SELECT '<a/>'::xml")
+    |> pog.returning(decode.dynamic)
+    |> pog.execute(db.data)
+
+  // The only connection of the pool can still be used
+  assert pog.query("SELECT 1")
+    |> pog.returning(decode.at([0], decode.int))
+    |> pog.execute(db.data)
+    == Ok(pog.Returned(1, [1]))
+
+  disconnect(db)
+}
+
+pub fn command_count_test() {
+  let db = start_default()
+  let count = fn(sql) {
+    let assert Ok(returned) = pog.query(sql) |> pog.execute(db.data)
+    returned.count
+  }
+
+  assert count("SHOW timezone") == 1
+  assert count("SET statement_timeout TO 0") == 0
+  assert count("CREATE TEMPORARY TABLE IF NOT EXISTS count_test (id INTEGER)")
+    == 0
+
+  disconnect(db)
+}
+
+pub fn connection_parameter_test() {
+  let assert Ok(db) =
+    process.new_name("pog_test")
+    |> default_config
+    |> pog.connection_parameter(name: "timezone", value: "Europe/Paris")
+    |> pog.start
+
+  assert pog.query("SHOW timezone")
+    |> pog.returning(decode.at([0], decode.string))
+    |> pog.execute(db.data)
+    == Ok(pog.Returned(1, ["Europe/Paris"]))
+
+  disconnect(db)
+}
+
+pub fn connection_unavailable_test() {
+  let assert Ok(db) =
+    process.new_name("pog_test")
+    |> default_config
+    |> pog.password(Some("wrong password"))
+    |> pog.default_timeout(1000)
+    |> pog.start
+
+  assert pog.query("SELECT 1") |> pog.execute(db.data)
+    == Error(pog.ConnectionUnavailable)
+
+  disconnect(db)
+}
+
+pub fn supervised_test() {
+  let name = process.new_name("pog_test")
+  let assert Ok(supervisor) =
+    static_supervisor.new(static_supervisor.OneForOne)
+    |> static_supervisor.add(pog.supervised(default_config(name)))
+    |> static_supervisor.start
+
+  assert pog.query("SELECT 1")
+    |> pog.returning(decode.at([0], decode.int))
+    |> pog.execute(pog.named_connection(name))
+    == Ok(pog.Returned(1, [1]))
+
+  disconnect(supervisor)
+}
+
+pub fn timestamp_test() {
+  let db = start_default()
+  let round_trip = fn(timestamp) {
+    pog.query("SELECT $1::timestamp")
+    |> pog.parameter(pog.timestamp(timestamp))
+    |> pog.returning(decode.at([0], pog.timestamp_decoder()))
+    |> pog.execute(db.data)
+  }
+  let timestamps = [
+    timestamp.from_unix_seconds(0),
+    timestamp.from_unix_seconds_and_nanoseconds(1_700_000_000, 123_456_000),
+    // Before 1970, with a negative number of microseconds
+    timestamp.from_unix_seconds_and_nanoseconds(-1, -500_000_000),
+  ]
+
+  list.each(timestamps, fn(timestamp) {
+    assert round_trip(timestamp) == Ok(pog.Returned(1, [timestamp]))
+  })
+
+  assert pog.query("SELECT $1::timestamp::text")
+    |> pog.parameter(
+      pog.timestamp(timestamp.from_unix_seconds_and_nanoseconds(
+        -1,
+        -500_000_000,
+      )),
+    )
+    |> pog.returning(decode.at([0], decode.string))
+    |> pog.execute(db.data)
+    == Ok(pog.Returned(1, ["1969-12-31 23:59:58.5"]))
+
+  disconnect(db)
+}
+
+pub fn calendar_time_of_day_test() {
+  let db = start_default()
+  let time = calendar.TimeOfDay(13, 45, 12, 123_456_000)
+
+  assert pog.query("SELECT $1::time")
+    |> pog.parameter(pog.calendar_time_of_day(time))
+    |> pog.returning(decode.at([0], pog.calendar_time_of_day_decoder()))
+    |> pog.execute(db.data)
+    == Ok(pog.Returned(1, [time]))
+
+  disconnect(db)
+}
+
+/// The README recommends `pog.text` for these types.
+pub fn text_encoded_types_test() {
+  let db = start_default()
+  let text = fn(sql, value) {
+    pog.query(sql)
+    |> pog.parameter(pog.text(value))
+    |> pog.returning(decode.at([0], decode.string))
+    |> pog.execute(db.data)
+  }
+  let uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+
+  assert text("SELECT $1::uuid::text", uuid) == Ok(pog.Returned(1, [uuid]))
+  assert text("SELECT ($1::jsonb)->>'a'", "{\"a\": \"b\"}")
+    == Ok(pog.Returned(1, ["b"]))
+  assert text("SELECT $1::numeric::text", "12345678901234567.89")
+    == Ok(pog.Returned(1, ["12345678901234567.89"]))
+
+  disconnect(db)
+}
+
+pub fn unexpected_argument_type_for_date_test() {
+  let db = start_default()
+
+  assert pog.query("SELECT $1::date")
+    |> pog.parameter(pog.text(""))
+    |> pog.execute(db.data)
+    == Error(pog.UnexpectedArgumentType("date", "<<>>"))
+
+  disconnect(db)
+}
+
+pub fn error_code_name_test() {
+  assert pog.error_code_name("23505") == Ok("unique_violation")
+  assert pog.error_code_name("XXXXX") == Error(Nil)
 }
